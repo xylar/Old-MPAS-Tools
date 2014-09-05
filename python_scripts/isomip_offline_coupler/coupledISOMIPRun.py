@@ -1,5 +1,6 @@
 import numpy
 import os
+import os.path
 from optparse import OptionParser
 import subprocess
 
@@ -28,6 +29,11 @@ def readCurrentDate():
   day = int(dateString[8:10])
   hour = int(dateString[11:13])
   return (year,month,day,hour)
+  
+def dateToStepIndex(date):
+  totalHours = date[3] + 24*((date[2]-1) + 30*((date[1]-1) + 12*date[0]))
+  stepIndex = totalHours/coupleHours
+  return stepIndex
 
 def namelistFromTemplate(init):
   infile = open('namelist.ocean_forward.template','r')
@@ -49,10 +55,11 @@ def namelistFromTemplate(init):
   outfile.close()
   
 parser = OptionParser()           
-parser.add_option("--folder", type="string", default="isomip_spherical", dest="folder")
+parser.add_option("--folder", type="string", default=".", dest="folder")
 parser.add_option("--init", action="store_true", dest="init")
 parser.add_option("--coupleHours", type="int", default=6, dest="coupleHours")
-parser.add_option("--coupleStepCount", type="int", default=10, dest="coupleStepCount")
+parser.add_option("--coupleStepCount", type="int", default=120, dest="coupleStepCount")
+parser.add_option("--keepOutputFrequency", type="int", default=40, dest="keepOutputFrequency")
 
 options, args = parser.parse_args()
 
@@ -64,6 +71,8 @@ coupleHours = options.coupleHours
 
 init = options.init
 makeTemplate = True
+
+dates = []
 
 for stepIndex in range(options.coupleStepCount):
 
@@ -79,10 +88,25 @@ for stepIndex in range(options.coupleStepCount):
     print "ocean_forward_model failed! Exiting."
     exit(status)
     
-  currentDate = readCurrentDate()
-  prevDate = getPrevDate(currentDate,coupleHours)
-  outputFile = "output.%04i-%02i-%02i_%02i.00.00.nc"%prevDate
-  restartFile = "restart.%04i-%02i-%02i_%02i.00.00.nc"%currentDate
+  dates = []
+  dates.append(readCurrentDate())
+  for index in range(2):
+    dates.append(getPrevDate(dates[index],coupleHours))
+    
+  # do we need to remove the previous output/restart files?
+  stepIndex = dateToStepIndex(dates[1])
+  if(numpy.mod(stepIndex,options.keepOutputFrequency) != 0):
+    outputFile = "output.%04i-%02i-%02i_%02i.00.00.nc"%dates[2]
+    if(os.path.exists(outputFile)):
+      print "deleting old file", outputFile
+      os.remove(outputFile)
+    restartFile = "restart.%04i-%02i-%02i_%02i.00.00.nc"%dates[1]
+    if(os.path.exists(restartFile)):
+      print "deleting old file", restartFile
+      os.remove(restartFile)
+      
+  outputFile = "output.%04i-%02i-%02i_%02i.00.00.nc"%dates[1]
+  restartFile = "restart.%04i-%02i-%02i_%02i.00.00.nc"%dates[0]
   
   for writeFile in [outputFile, restartFile]:
     args = ["python", "%s/recomputeISOMIPMeltFluxes.py"%codePath,

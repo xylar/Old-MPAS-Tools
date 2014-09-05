@@ -42,8 +42,8 @@ freezingTemperature = T0 + dT_dS*surfSalinity + dT_dp*surfPressure
 temperatureFlux = -iceMask*gamma*(surfTemperature-freezingTemperature) 
 freshwaterFlux = -temperatureFlux*(Cp/L)
 temperatureFlux += freshwaterFlux*freezingTemperature
-print numpy.amin(freshwaterFlux), numpy.amax(freshwaterFlux)
-print numpy.amin(temperatureFlux), numpy.amax(temperatureFlux)
+print "min/max fw flux:", numpy.amin(freshwaterFlux), numpy.amax(freshwaterFlux)
+print "min/max T flux: ", numpy.amin(temperatureFlux), numpy.amax(temperatureFlux)
 
 tempFlux[timeIndex,:] = temperatureFlux
 massFlux[timeIndex,:] = freshwaterFlux
