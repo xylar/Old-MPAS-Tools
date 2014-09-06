@@ -60,10 +60,10 @@ parser.add_option("--init", action="store_true", dest="init")
 parser.add_option("--coupleHours", type="int", default=6, dest="coupleHours")
 parser.add_option("--coupleStepCount", type="int", default=120, dest="coupleStepCount")
 parser.add_option("--keepOutputFrequency", type="int", default=40, dest="keepOutputFrequency")
+parser.add_option("--mpasCommand", type="string", default="mpirun -n 8 ./ocean_forward_model", dest="mpasCommand")
+parser.add_option("--pythonCommand", type="string", default="python recomputeISOMIPMeltFluxes.py", dest="pythonCommand")
 
 options, args = parser.parse_args()
-
-codePath = os.getcwd()
 
 os.chdir(options.folder)
 
@@ -81,7 +81,7 @@ for stepIndex in range(options.coupleStepCount):
     if(not init):
       makeTemplate = False
  
-  args = ["mpirun","-n","8","./ocean_forward_model"]
+  args = options.mpasCommand.split()
   status = subprocess.call(args)
   
   if status != 0:
@@ -109,8 +109,9 @@ for stepIndex in range(options.coupleStepCount):
   restartFile = "restart.%04i-%02i-%02i_%02i.00.00.nc"%dates[0]
   
   for writeFile in [outputFile, restartFile]:
-    args = ["python", "%s/recomputeISOMIPMeltFluxes.py"%codePath,
-            outputFile,writeFile]
+    args = options.pythonCommand.split()
+    args.append(outputFile)
+    args.append(writeFile)
     status = subprocess.call(args)
     
     if status != 0:
