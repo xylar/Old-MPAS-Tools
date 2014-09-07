@@ -20,7 +20,7 @@
 	config_pio_stride = 1
 /
 &time_integration
-	config_dt = 1800.0
+	config_dt = 300.0
 	config_time_integrator = 'split_explicit'
 /
 &ALE_vertical_grid
@@ -173,7 +173,7 @@
 	config_n_bcl_iter_beg = 1
 	config_n_bcl_iter_mid = 2
 	config_n_bcl_iter_end = 2
-	config_n_btr_subcycles = 30
+	config_n_btr_subcycles = 20
 	config_n_btr_cor_iter = 2
 	config_vel_correction = .true.
 	config_btr_subcycle_loop_factor = 2

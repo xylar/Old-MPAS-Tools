@@ -69,25 +69,26 @@ os.chdir(options.folder)
 
 coupleHours = options.coupleHours
 
-init = options.init
-makeTemplate = True
+if(options.init):
+  namelistFromTemplate(True)
 
-dates = []
-
-for stepIndex in range(options.coupleStepCount):
-
-  if(makeTemplate):
-    namelistFromTemplate(init)
-    if(not init):
-      makeTemplate = False
- 
   args = options.mpasCommand.split()
   status = subprocess.call(args)
   
   if status != 0:
     print "ocean_forward_model failed! Exiting."
     exit(status)
-    
+
+  exit()
+
+makeTemplate = True
+
+for stepIndex in range(options.coupleStepCount):
+
+  if(makeTemplate):
+    namelistFromTemplate(False)
+    makeTemplate = False
+ 
   dates = []
   dates.append(readCurrentDate())
   for index in range(2):
@@ -118,5 +119,10 @@ for stepIndex in range(options.coupleStepCount):
       print "recomputeISOMIPMeltFluxes.py failed! Exiting."
       exit(status)
   
-  init = False
-
+  args = options.mpasCommand.split()
+  status = subprocess.call(args)
+  
+  if status != 0:
+    print "ocean_forward_model failed! Exiting."
+    exit(status)
+    
