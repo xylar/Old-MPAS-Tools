@@ -62,6 +62,7 @@ parser.add_option("--coupleStepCount", type="int", default=120, dest="coupleStep
 parser.add_option("--keepOutputFrequency", type="int", default=40, dest="keepOutputFrequency")
 parser.add_option("--mpasCommand", type="string", default="mpirun -n 8 ./ocean_forward_model", dest="mpasCommand")
 parser.add_option("--pythonCommand", type="string", default="python recomputeISOMIPMeltFluxes.py", dest="pythonCommand")
+parser.add_option("--ncoCommandPrefix", type="string", default="", dest="ncoCommandPrefix")
 
 options, args = parser.parse_args()
 
@@ -78,8 +79,20 @@ if(options.init):
   if status != 0:
     print "ocean_forward_model failed! Exiting."
     exit(status)
+    
+  # use the first step of the output coupling step output file
+  # to create an output file for all kept steps
+  inFileName = "output.0000-01-01_00.00.00.nc"
+  outFileName = "output.nc"
+  args = options.ncoCommandPrefix.split()
+  args.extend(["ncrcat","-O","-d","Time,0",inFileName,outFileName])
+  status = subprocess.call(args)
+  
+  if status != 0:
+    print "ncrcat failed! Exiting."
+    exit(status)
 
-  exit()
+  exit(0)
 
 makeTemplate = True
 
@@ -91,28 +104,40 @@ for stepIndex in range(options.coupleStepCount):
  
   dates = []
   dates.append(readCurrentDate())
-  for index in range(2):
-    dates.append(getPrevDate(dates[index],coupleHours))
+  dates.append(getPrevDate(dates[0],coupleHours))
+    
+  
+  outputFile = "output.%04i-%02i-%02i_%02i.00.00.nc"%dates[1]
+  stepIndex = dateToStepIndex(dates[0])
+  if(numpy.mod(stepIndex,options.keepOutputFrequency) == 0 and os.path.exists(outputFile)):
+    # append the last time step from output onto the original output file
+    print "adding last time step from", outputFile, "to output.nc"
+    args = options.ncoCommandPrefix.split()
+    args.extend(["ncrcat","--record_append","-d","Time,1",outputFile,"output.nc"])
+    status = subprocess.call(args)
+    
+    if status != 0:
+      print "ncrcat failed! Exiting."
+      exit(status)
+
+  if(os.path.exists(outputFile)):
+    print "deleting unneeded file", outputFile
+    os.remove(outputFile)
     
   # do we need to remove the previous output/restart files?
   stepIndex = dateToStepIndex(dates[1])
   if(numpy.mod(stepIndex,options.keepOutputFrequency) != 0):
-    outputFile = "output.%04i-%02i-%02i_%02i.00.00.nc"%dates[2]
-    if(os.path.exists(outputFile)):
-      print "deleting old file", outputFile
-      os.remove(outputFile)
     restartFile = "restart.%04i-%02i-%02i_%02i.00.00.nc"%dates[1]
     if(os.path.exists(restartFile)):
-      print "deleting old file", restartFile
+      print "deleting unneeded file", restartFile
       os.remove(restartFile)
       
-  outputFile = "output.%04i-%02i-%02i_%02i.00.00.nc"%dates[1]
+    
+  outputFile = "output.nc"
   restartFile = "restart.%04i-%02i-%02i_%02i.00.00.nc"%dates[0]
-  
   for writeFile in [outputFile, restartFile]:
     args = options.pythonCommand.split()
-    args.append(outputFile)
-    args.append(writeFile)
+    args.extend([outputFile, writeFile])
     status = subprocess.call(args)
     
     if status != 0:
