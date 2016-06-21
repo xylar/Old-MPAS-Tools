@@ -21,6 +21,20 @@ try:
 except:
     use_progress_bar = False
 
+def is_valid_mesh_var(mesh_file, variable_name):
+    if mesh_file is None:
+        return False
+    
+    if variable_name not in mesh_file.variables:
+        return False
+        
+    return 'Time' not in mesh_file.variables[variable_name].dimensions
+        
+def get_var(variable_name, mesh_file, time_series_file):
+    if is_valid_mesh_var(mesh_file, variable_name):
+        return mesh_file.variables[variable_name]
+    else:
+        return time_series_file.variables[variable_name]
 
 # This function finds a list of NetCDF files containing time-dependent
 # MPAS data and extracts the time indices in each file.  The routine
@@ -50,12 +64,16 @@ def setup_time_indices(fn_pattern):#{{{
 
 
         try:
-            local_times = nc_file.dimensions['Time'][:]
+            xtime = nc_file.variables['xtime'][:,:]
+            local_times = []
+            for index in range(xtime.shape[0]):
+              local_times.append(''.join(xtime[index,:]))
+           
         except:
-            local_times = [0.]
-            
+            local_times = ['0']
+
         if(len(local_times) == 0):
-            local_times = [0.]
+            local_times = ['0']
         nTime = len(local_times)
 
         for time_idx in range(nTime):
@@ -186,18 +204,9 @@ def parse_extra_dims(dimension_list, time_series_file, mesh_file, max_index_coun
 # (used in expanding command line placeholders "all", "allOnCells", etc.)
 
 def setup_dimension_values_and_sort_vars(time_series_file, mesh_file, variable_list, extra_dims, 
-                                         basic_dims=['nCells', 'nEdges', 'nVertices','Time'],
+                                         basic_dims=['nCells', 'nEdges', 'nVertices', 'Time'],
                                          include_dims=['nCells', 'nEdges', 'nVertices']):#{{{
 
-    def is_valid_mesh_var(variable_name):
-        if mesh_file is None:
-            return False
-        
-        if variable_name not in mesh_file.variables:
-            return False
-            
-        return 'Time' not in mesh_file.variables[variable_name].dimensions
-        
     def add_var(variables, variable_name, include_dims, exclude_dims=None):
         if variable_name in variable_names:
             return
@@ -248,7 +257,7 @@ def setup_dimension_values_and_sort_vars(time_series_file, mesh_file, variable_l
     promptDimNames = []
     display_prompt = True
     for variable_name in variable_names:
-        if is_valid_mesh_var(variable_name):
+        if is_valid_mesh_var(mesh_file, variable_name):
             nc_file = mesh_file
         else:
             nc_file = time_series_file
@@ -280,11 +289,7 @@ def setup_dimension_values_and_sort_vars(time_series_file, mesh_file, variable_l
     for variable_name in variable_names:
 
         dim_vals = []
-        if is_valid_mesh_var(variable_name):
-            nc_file = mesh_file
-        else:
-            nc_file = time_series_file
-        field_dims = nc_file.variables[variable_name].dimensions
+        field_dims = get_var(variable_name, mesh_file, time_series_file).dimensions
 
         # Setting dimension values:
         indices = []
@@ -415,5 +420,246 @@ def write_vtp_header(prefix, active_var_index, var_indices, variable_list, all_d
     return vtkFile
 #}}}
 
+
+def build_cell_lists( nc_file, blocking ):#{{{
+    nCells = len(nc_file.dimensions['nCells'])
+
+    nEdgesOnCell_var = nc_file.variables['nEdgesOnCell']
+    verticesOnCell_var = nc_file.variables['verticesOnCell']
+
+    offsets = numpy.cumsum(nEdgesOnCell_var[:], dtype=int)
+    connectivity = numpy.zeros(offsets[-1], dtype=int)
+    valid_mask = numpy.ones(nCells,bool)
+
+    # Build cells
+    nBlocks = 1 + nCells / blocking
+    if use_progress_bar:
+        widgets = ['Build cell connectivity: ', Percentage(), ' ', Bar(), ' ', ETA()]
+        cell_bar = ProgressBar(widgets=widgets, maxval=nBlocks).start()
+    else:
+        print "Build cell connectivity..."
+
+    outIndex = 0
+    for iBlock in range(nBlocks):
+        blockStart = iBlock * blocking
+        blockEnd = min( (iBlock + 1) * blocking, nCells )
+        blockCount = blockEnd - blockStart
+
+        nEdgesOnCell = nEdgesOnCell_var[blockStart:blockEnd]
+        verticesOnCell = verticesOnCell_var[blockStart:blockEnd,:] - 1
+
+        for idx in range(blockCount):
+            cellCount = nEdgesOnCell[idx]
+            connectivity[outIndex:outIndex+cellCount] = verticesOnCell[idx,0:cellCount]
+            outIndex += cellCount
+
+        del nEdgesOnCell
+        del verticesOnCell
+        if use_progress_bar:
+            cell_bar.update(iBlock)
+
+    if use_progress_bar:
+        cell_bar.finish()
+
+    return (connectivity, offsets, valid_mask)
+
+#}}}
+
+def build_dual_cell_lists( nc_file, blocking ):#{{{
+    print "Build dual connectivity...."
+    vertexDegree = len(nc_file.dimensions['vertexDegree'])
+
+    cellsOnVertex = nc_file.variables['cellsOnVertex'][:,:]-1
+
+    valid_mask = numpy.all(cellsOnVertex >= 0, axis=1)
+    connectivity = cellsOnVertex[valid_mask,:].ravel()
+    validCount = numpy.count_nonzero(valid_mask)
+    offsets = vertexDegree*numpy.arange(1,validCount+1)
+
+    return (connectivity, offsets, valid_mask)
+
+#}}}
+
+def build_edge_cell_lists( nc_file, blocking ):#{{{
+    nCells = len(nc_file.dimensions['nCells'])
+    nEdges = len(nc_file.dimensions['nEdges'])
+
+    cellsOnEdge_var = nc_file.variables['cellsOnEdge']
+    verticesOnEdge_var = nc_file.variables['verticesOnEdge']
+
+    valid_mask = numpy.zeros(nEdges,bool)
+
+    connectivity = []
+    offsets = []
+
+    # Build cells
+    nBlocks = 1 + nEdges / blocking
+    if use_progress_bar:
+        widgets = ['Build edge connectivity: ', Percentage(), ' ', Bar(), ' ', ETA()]
+        edge_bar = ProgressBar(widgets=widgets, maxval=nBlocks).start()
+    else:
+        print "Build edge connectivity...."
+
+    offset = 0
+    for iBlock in numpy.arange(0, nBlocks):
+        blockStart = iBlock * blocking
+        blockEnd = min( (iBlock + 1) * blocking, nEdges )
+        blockCount = blockEnd - blockStart
+
+        verticesOnEdge = verticesOnEdge_var[blockStart:blockEnd,:] - 1
+        cellsOnEdge = cellsOnEdge_var[blockStart:blockEnd,:] - 1
+
+        vertices = numpy.zeros((blockCount,4))
+        vertices[:,0] = cellsOnEdge[:,0]
+        vertices[:,1] = verticesOnEdge[:,0]
+        vertices[:,2] = cellsOnEdge[:,1]
+        vertices[:,3] = verticesOnEdge[:,1]
+        valid = vertices >= 0
+        vertices[:,1] += nCells
+        vertices[:,3] += nCells
+        validCount = numpy.sum(numpy.array(valid,int),axis=1)
+
+        for idx in range(blockCount):
+            if(validCount[idx] < 3):
+                continue
+            valid_mask[blockStart + idx] = True
+            verts = vertices[idx,valid[idx]]
+            connectivity.extend(list(verts))
+            offset += validCount[idx]
+            offsets.append(offset)
+
+        del cellsOnEdge
+        del verticesOnEdge
+        del vertices, valid, validCount
+
+        if use_progress_bar:
+            edge_bar.update(iBlock)
+
+    if use_progress_bar:
+        edge_bar.finish()
+
+    connectivity = numpy.array(connectivity, dtype=int)
+    offsets = numpy.array(offsets, dtype=int)
+
+    return (connectivity, offsets, valid_mask)
+
+#}}}
+
+def build_location_list_xyz( nc_file, xName, yName, zName, output_32bit ):#{{{
+
+    X = nc_file.variables[xName][:]
+    Y = nc_file.variables[yName][:]
+    Z = nc_file.variables[zName][:]
+    if output_32bit:
+        X = numpy.array(X,'f4')
+        Y = numpy.array(Y,'f4')
+        Z = numpy.array(Z,'f4')
+    return (X,Y,Z)
+
+#}}}
+
+
+def get_field_sign(field_name):
+    if field_name[0] == '-':
+        field_name = field_name[1:]
+        sign = -1
+    else:
+        sign = 1
+        
+    return (field_name, sign)
+
+def read_field(field_var, extra_dim_vals, time_index, cell_indices, 
+               outType, sign=1, vert_dim_name=None, nLevels=None):#{{{
+
+    def read_field_with_dims(field_var, dim_vals, field):#{{{
+        outDims = len(field.shape)
+        inDims = len(dim_vals)
+        if outDims <= 0 or outDims > 2:
+            print 'reading field into variable with dimension', outDims, 'not supported.'
+            exit(1)
+        if inDims <= 0 or inDims > 5:
+            print 'reading field with dimension', inDims, 'not supported.'
+            exit(1)
+        
+        if outDims == 1:
+            if inDims == 1:
+                field[:] = field_var[dim_vals[0]]
+            elif inDims == 2:
+                field[:] = field_var[dim_vals[0], dim_vals[1]]
+            elif inDims == 3:
+                field[:] = field_var[dim_vals[0], dim_vals[1], dim_vals[2]]
+            elif inDims == 4:
+                field[:] = field_var[dim_vals[0], dim_vals[1], dim_vals[2], dim_vals[3]]
+            elif inDims == 5:
+                field[:] = field_var[dim_vals[0], dim_vals[1], dim_vals[2], dim_vals[3], dim_vals[4]]
+        elif outDims == 2:
+            if inDims == 1:
+                field[:,:] = field_var[dim_vals[0]]
+            elif inDims == 2:
+                field[:,:] = field_var[dim_vals[0], dim_vals[1]]
+            elif inDims == 3:
+                field[:,:] = field_var[dim_vals[0], dim_vals[1], dim_vals[2]]
+            elif inDims == 4:
+                field[:,:] = field_var[dim_vals[0], dim_vals[1], dim_vals[2], dim_vals[3]]
+            elif inDims == 5:
+                field[:,:] = field_var[dim_vals[0], dim_vals[1], dim_vals[2], dim_vals[3], dim_vals[4]]
+#}}}
+
+
+    dim_vals = []
+    extraDimIndex = 0
+    for dim in field_var.dimensions:
+        if dim == 'Time':
+            dim_vals.append(time_index)
+        elif dim == 'nCells':
+            dim_vals.append(cell_indices)
+        elif dim == vert_dim_name:
+            dim_vals.append(numpy.arange(nLevels))
+        else:
+            dim_vals.append(extra_dim_vals[extraDimIndex])
+            extraDimIndex += 1
+
+    if vert_dim_name in field_var.dimensions:
+        field = numpy.zeros((len(cell_indices),nLevels), dtype=outType)
+
+    else:
+        field = numpy.zeros((len(cell_indices)), dtype=outType)
+        
+    read_field_with_dims(field_var, dim_vals, field)
+
+    return sign*field
+#}}}
+
+
+def compute_zInterface(minLevelCell, maxLevelCell, layerThicknessCell, 
+                      zMinCell, zMaxCell, dtype):#{{{
+    
+    (nCells,nLevels) = layerThicknessCell.shape
+    cellMask = numpy.ones((nCells,nLevels), bool)
+    for iLevel in range(nLevels):
+        if minLevelCell is not None:
+            cellMask[:,iLevel] = numpy.logical_and(cellMask[:,iLevel], iLevel >= minLevelCell)
+        if maxLevelCell is not None:
+            cellMask[:,iLevel] = numpy.logical_and(cellMask[:,iLevel], iLevel <= maxLevelCell)
+
+
+    zInterface = numpy.zeros((nCells,nLevels+1),dtype=dtype)
+    for iLevel in range(nLevels):
+        zInterface[:,iLevel+1] = (zInterface[:,iLevel]
+            + cellMask[:,iLevel]*layerThicknessCell[:,iLevel])
+
+    # work your way from either the min or the max to compute zInterface
+    if zMinCell is not None:
+        minLevel = minLevelCell.copy()
+        minLevel[minLevel < 0] = nLevels-1
+        zOffsetCell = zMinCell - zInterface[numpy.arange(0,nCells),minLevel]
+    else:
+        zOffsetCell = zMaxCell - zInterface[numpy.arange(0,nCells),maxLevelCell+1]
+
+    for iLevel in range(nLevels+1):
+        zInterface[:,iLevel] += zOffsetCell
+
+    return zInterface
+#}}}
 
 # vim: set expandtab:
