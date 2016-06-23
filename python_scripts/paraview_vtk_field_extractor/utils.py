@@ -41,7 +41,13 @@ def get_var(variable_name, mesh_file, time_series_file):
 # insures that each time is unique.
 def setup_time_indices(fn_pattern):#{{{
     # Build file list and time indices
-    file_list = sorted(glob.glob(fn_pattern))
+    if ';' in fn_pattern:
+        file_list = []
+        for pattern in fn_pattern.split(';'):
+            file_list.extend(glob.glob(pattern))
+    else:
+        file_list = glob.glob(fn_pattern)
+    file_list.sort()
 
     local_indices = []
     file_names = []
