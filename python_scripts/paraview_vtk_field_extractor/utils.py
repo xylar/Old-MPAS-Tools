@@ -291,13 +291,24 @@ def setup_dimension_values_and_sort_vars(time_series_file, mesh_file, variable_l
                 else:
                     print " -- Invalid value, please re-enter --"
 
-
+    empty_dims = []
+    for dim in extra_dims:
+        if len(extra_dims[dim]) == 0:
+            empty_dims.append(dim)
+    
     for variable_name in variable_names:
 
-        dim_vals = []
         field_dims = get_var(variable_name, mesh_file, time_series_file).dimensions
+        skip = False
+        for dim in field_dims:
+            if dim in empty_dims:
+                skip = True
+                break
+        if skip:
+            continue
 
         # Setting dimension values:
+        dim_vals = []
         indices = []
         for dim in field_dims:
             if dim not in basic_dims:
