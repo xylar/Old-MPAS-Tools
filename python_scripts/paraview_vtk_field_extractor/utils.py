@@ -160,29 +160,10 @@ def parse_extra_dim(dim_name, index_string, time_series_file, mesh_file):#{{{
 # a constant value for the index vertical index to the topography or
 # the name of a field with dimension nCells that contains the vertical index of
 # the topography.
-def parse_extra_dims(dimension_list, time_series_file, mesh_file, max_index_count=None,
-                     topo_dim=None, topo_cell_indices_name=None):#{{{
+def parse_extra_dims(dimension_list, time_series_file, mesh_file, 
+                     max_index_count=None):#{{{
     if not dimension_list:
         return {}
-        
-    if topo_dim is not None:
-        # topo_dim is a special extra dimension where we store an array of cell
-        # indices to the bottom of the topography
-        if topo_cell_indices_name is not None:
-            if (mesh_file is not None) and (topo_cell_indices_name in mesh_file.variables):
-                topo_cell_indices = mesh_file.variables[topo_cell_indices_name][:]-1
-            elif topo_cell_indices_name in time_series_file.variables:
-                topo_cell_indices = time_series_file.variables[topo_cell_indices_name][:]-1
-            else:
-                # assuming topo_cell_indices_name is a constant value
-                index = int(topo_cell_indices_name)
-                nCells = len(mesh_file.dimensions['nCells'])
-                topo_cell_indices = index*numpy.ones(nCells, int)
-        else:
-            index = len(mesh_file.dimensions[topo_dim])-1
-            nCells = len(mesh_file.dimensions['nCells'])
-            topo_cell_indices = index*numpy.ones(nCells, int)
-
 
     extra_dims = {}
     for dim_item in dimension_list:
@@ -194,10 +175,7 @@ def parse_extra_dims(dimension_list, time_series_file, mesh_file, max_index_coun
             else:
                 extra_dims[dimName] = indices[0:max_index_count]
 
-    if topo_dim is None:
-        return extra_dims
-    else:
-        return (topo_cell_indices, extra_dims)
+    return extra_dims
 #}}}
 
 
@@ -364,8 +342,8 @@ def summarize_extraction(mesh_file, time_indices, cellVars, vertexVars, edgeVars
     print ""
 #}}}
 
-def write_pvd_header(prefix):#{{{
-    pvd_file = open('vtk_files/%s.pvd'%(prefix), 'w')
+def write_pvd_header(path, prefix):#{{{
+    pvd_file = open('%s/%s.pvd'%(path, prefix), 'w')
     pvd_file.write('<?xml version="1.0"?>\n')
     pvd_file.write('<VTKFile type="Collection" version="0.1"\n')
     pvd_file.write('\tbyte_order="LittleEndian"\n')
@@ -394,10 +372,10 @@ def get_hyperslab_name_and_dims(var_name, all_dim_vals):#{{{
     return (out_var_names, extra_dim_vals)
 #}}}
 
-def write_vtp_header(prefix, active_var_index, var_indices, variable_list, all_dim_vals,
+def write_vtp_header(path, prefix, active_var_index, var_indices, variable_list, all_dim_vals,
                      vertices, connectivity, offsets, nPoints, nPolygons, outType, 
                      cellData=True, pointData=False):#{{{
-    vtkFile = VtkFile("vtk_files/%s"%prefix, VtkPolyData)
+    vtkFile = VtkFile("%s/%s"%(path,prefix), VtkPolyData)
     vtkFile.openElement(vtkFile.ftype.name)
     vtkFile.openPiece(npoints=nPoints,npolys=nPolygons)
 
@@ -649,9 +627,10 @@ def read_field(field_var, extra_dim_vals, time_index, cell_indices,
 
 
 def compute_zInterface(minLevelCell, maxLevelCell, layerThicknessCell, 
-                      zMinCell, zMaxCell, dtype):#{{{
+                           zMinCell, zMaxCell, dtype, cellsOnEdge=None):#{{{
     
     (nCells,nLevels) = layerThicknessCell.shape
+    
     cellMask = numpy.ones((nCells,nLevels), bool)
     for iLevel in range(nLevels):
         if minLevelCell is not None:
@@ -659,24 +638,87 @@ def compute_zInterface(minLevelCell, maxLevelCell, layerThicknessCell,
         if maxLevelCell is not None:
             cellMask[:,iLevel] = numpy.logical_and(cellMask[:,iLevel], iLevel <= maxLevelCell)
 
-
-    zInterface = numpy.zeros((nCells,nLevels+1),dtype=dtype)
+    zInterfaceCell = numpy.zeros((nCells,nLevels+1),dtype=dtype)
     for iLevel in range(nLevels):
-        zInterface[:,iLevel+1] = (zInterface[:,iLevel]
+        zInterfaceCell[:,iLevel+1] = (zInterfaceCell[:,iLevel]
             + cellMask[:,iLevel]*layerThicknessCell[:,iLevel])
-
-    # work your way from either the min or the max to compute zInterface
+            
     if zMinCell is not None:
         minLevel = minLevelCell.copy()
         minLevel[minLevel < 0] = nLevels-1
-        zOffsetCell = zMinCell - zInterface[numpy.arange(0,nCells),minLevel]
+        zOffsetCell = zMinCell - zInterfaceCell[numpy.arange(0,nCells),minLevel]
     else:
-        zOffsetCell = zMaxCell - zInterface[numpy.arange(0,nCells),maxLevelCell+1]
+        zOffsetCell = zMaxCell - zInterfaceCell[numpy.arange(0,nCells),maxLevelCell+1]
 
     for iLevel in range(nLevels+1):
-        zInterface[:,iLevel] += zOffsetCell
+        zInterfaceCell[:,iLevel] += zOffsetCell
 
-    return zInterface
+    if cellsOnEdge is None:
+         return zInterfaceCell
+    else:
+        nEdges = cellsOnEdge.shape[0]
+        zInterfaceEdge = numpy.zeros((nEdges,nLevels+1),dtype=dtype)
+
+        # Get a list of valid cells on edges and a mask of which are valid
+        cellsOnEdgeMask = numpy.logical_and(cellsOnEdge >= 0, cellsOnEdge < nCells)
+        cellIndicesOnEdge = []
+        cellIndicesOnEdge.append(cellsOnEdge[cellsOnEdgeMask[:,0],0])
+        cellIndicesOnEdge.append(cellsOnEdge[cellsOnEdgeMask[:,1],1])
+        
+        for iLevel in range(nLevels):
+            edgeMask = numpy.zeros(nEdges, bool)
+            layerThicknessEdge = numpy.zeros(nEdges, float)
+            denom = numpy.zeros(nEdges, float)
+            for index in range(2):
+                mask = cellsOnEdgeMask[:,index]
+                cellIndices = cellIndicesOnEdge[index]
+                cellMaskLocal = cellMask[cellIndices,iLevel]
+
+                edgeMask[mask] = numpy.logical_or(edgeMask[mask], cellMaskLocal)
+
+                layerThicknessEdge[mask] += cellMaskLocal*layerThicknessCell[cellIndices,iLevel]
+                denom[mask] += 1.0*cellMaskLocal
+
+            layerThicknessEdge[edgeMask] /= denom[edgeMask]
+
+            zInterfaceEdge[:,iLevel+1] = (zInterfaceEdge[:,iLevel] 
+                                       + edgeMask*layerThicknessEdge)
+
+        if zMinCell is not None:
+            refLevelEdge = numpy.zeros(nEdges, int)
+            for index in range(2):
+                mask = cellsOnEdgeMask[:,index]
+                cellIndices = cellIndicesOnEdge[index]
+                refLevelEdge[mask] = numpy.maximum(refLevelEdge[mask], minLevel[cellIndices])
+        else:
+            refLevelEdge = (nLevels-1)*numpy.ones(nEdges, int)
+            for index in range(2):
+                mask = cellsOnEdgeMask[:,index]
+                cellIndices = cellIndicesOnEdge[index]
+                refLevelEdge[mask] = numpy.minimum(refLevelEdge[mask], maxLevelCell[cellIndices]+1)
+                    
+
+        zOffsetEdge = numpy.zeros(nEdges, float)
+        # add the average of zInterfaceCell at each adjacent cell
+        denom = numpy.zeros(nEdges, float)
+        for index in range(2):
+            mask = cellsOnEdgeMask[:,index]
+            cellIndices = cellIndicesOnEdge[index]
+            zOffsetEdge[mask] += zInterfaceCell[cellIndices,refLevelEdge[mask]]
+            denom[mask] += 1.0
+
+        mask = denom > 0.
+        zOffsetEdge[mask] /= denom[mask]
+        
+        # subtract the depth of zInterfaceEdge at the level of the bottom
+        zOffsetEdge -= zInterfaceEdge[numpy.arange(nEdges),refLevelEdge]
+    
+        for iLevel in range(nLevels+1):
+            zInterfaceEdge[:,iLevel] += zOffsetEdge
+
+        return (zInterfaceCell, zInterfaceEdge)
+
 #}}}
+
 
 # vim: set expandtab:

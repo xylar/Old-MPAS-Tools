@@ -132,13 +132,13 @@ def build_field_time_series( local_time_indices, file_names, mesh_file, blocking
         else:
             out_prefix = "timeDependentFieldsOn%s"%suffix
         # start the pvd file
-        pvd_file = utils.write_pvd_header(out_prefix)
+        pvd_file = utils.write_pvd_header('vtk_files', out_prefix)
         pvd_file.write('<Collection>\n')
 
     if not combine_output and not np.all(var_has_time_dim):
         out_prefix = "staticFieldsOn%s"%suffix
         varIndices = np.arange(nVars)[var_has_time_dim == False]
-        timeIndependentFile = utils.write_vtp_header(out_prefix, varIndices[0], varIndices,
+        timeIndependentFile = utils.write_vtp_header('vtk_files', out_prefix, varIndices[0], varIndices,
                                                      variable_list, all_dim_vals,
                                                      vertices, connectivity, offsets, 
                                                      nPoints, nPolygons, outType, 
@@ -165,7 +165,7 @@ def build_field_time_series( local_time_indices, file_names, mesh_file, blocking
                 varIndices = np.arange(nVars)
             else:
                 varIndices = np.arange(nVars)[var_has_time_dim]
-            timeDependentFile = utils.write_vtp_header(vtp_file_prefix, varIndices[0], varIndices,
+            timeDependentFile = utils.write_vtp_header('vtk_files', vtp_file_prefix, varIndices[0], varIndices,
                                                        variable_list, all_dim_vals,
                                                        vertices, connectivity, offsets, 
                                                        nPoints, nPolygons, outType, 

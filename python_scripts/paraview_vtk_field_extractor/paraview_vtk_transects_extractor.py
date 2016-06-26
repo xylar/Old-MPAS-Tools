@@ -229,11 +229,13 @@ def build_transects( mesh_file, transects_file, time_series_file,
         cellIndices = transects_file.variables['transectCellGlobalIDs'][iTransect,:]-1
         cellIndices = cellIndices[cellIndices >= 0]
         if min_level_name is not None:
-            minLevelCell = time_series_file.variables[min_level_name][cellIndices]-1
+            var = utils.get_var(min_level_name, mesh_file, time_series_file)
+            minLevelCell = var[cellIndices]-1
         else:
             minLevelCell = None
         if max_level_name is not None:
-            maxLevelCell = time_series_file.variables[max_level_name][cellIndices]-1
+            var = utils.get_var(max_level_name, mesh_file, time_series_file)
+            maxLevelCell = var[cellIndices]-1
         else:
             maxLevelCell = None
         
@@ -399,13 +401,13 @@ def build_transects_time_series( local_time_indices, file_names, mesh_file, all_
             else:
                 out_prefix = "timeDependentTransect_%s"%(template%iTransect)
             # start the pvd file
-            pvd_file = utils.write_pvd_header(out_prefix)
+            pvd_file = utils.write_pvd_header('vtk_files', out_prefix)
             pvd_file.write('<Collection>\n')
 
         if not combine_output and not np.all(var_has_time_dim):
             out_prefix = "staticTransect_%s"%(template%iTransect)
             varIndices = np.arange(nVars)[var_has_time_dim == False]
-            timeIndependentFile = utils.write_vtp_header(out_prefix, varIndices[0], 
+            timeIndependentFile = utils.write_vtp_header('vtk_files', out_prefix, varIndices[0],
                                                          varIndices, variable_names,
                                                          all_dim_vals, transect.points,
                                                          transect.connectivity,
@@ -435,7 +437,7 @@ def build_transects_time_series( local_time_indices, file_names, mesh_file, all_
                     varIndices = np.arange(nVars)
                 else:
                     varIndices = np.arange(nVars)[var_has_time_dim]
-                timeDependentFile = utils.write_vtp_header(vtp_file_prefix, varIndices[0], 
+                timeDependentFile = utils.write_vtp_header('vtk_files', vtp_file_prefix, varIndices[0],
                                                            varIndices, variable_names,
                                                            all_dim_vals, transect.points,
                                                            transect.connectivity,
